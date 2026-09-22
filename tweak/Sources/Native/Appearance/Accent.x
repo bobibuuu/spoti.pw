@@ -14,7 +14,6 @@ static const uint32_t kGreens[] = {0x1ED760, 0x1DB954};
 static const NSInteger kAppleMusicAccent = 0xFF375F;
 
 static NSInteger sg_accent = -1;   // 0xRRGGBB once chosen, read at launch
-static BOOL sg_accent_hooks = NO;
 
 static NSInteger currentChoice(void) {
     NSInteger choice = SGInt(SGKeyAccentChoice, -1);
@@ -61,10 +60,6 @@ NSString *SGAccentLabel(void) {
 
 void SGRefreshAccent(void) {
     sg_accent = chosen();
-    if (sg_accent >= 0 && !sg_accent_hooks) {
-        %init;
-        sg_accent_hooks = YES;
-    }
 }
 
 #pragma mark - picker
@@ -216,4 +211,5 @@ static id swappedValue(id value) {
 %ctor {
     if (!SGNativeUI()) return;
     SGRefreshAccent();
+    %init;
 }

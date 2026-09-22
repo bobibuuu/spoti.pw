@@ -15,7 +15,6 @@ static const uint32_t kGreens[] = {0x1ED760, 0x1DB954};
 static const NSInteger kAppleMusicAccent = 0xFF375F;
 
 static NSInteger sg_accent = -1;   // 0xRRGGBB once chosen, read at launch
-static BOOL sg_accent_hooks = NO;
 
 // Preserve the redesign's old custom value while new installs start on Spotify's green.
 static const NSInteger kDefaultAccent = 0x37F200;
@@ -66,10 +65,6 @@ NSString *SGRAccentLabel(void) {
 
 void SGRRefreshAccent(void) {
     sg_accent = chosen();
-    if (sg_accent >= 0 && !sg_accent_hooks) {
-        %init;
-        sg_accent_hooks = YES;
-    }
 }
 
 #pragma mark - picker
@@ -221,4 +216,5 @@ static id swappedValue(id value) {
 %ctor {
     if (!SGRedesignedUI()) return;
     SGRRefreshAccent();
+    %init;
 }
