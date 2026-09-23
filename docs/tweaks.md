@@ -84,8 +84,12 @@ Shared:
                   BiniLyrics.m and Unison.m, read by SGTTML.m, which carries a second voice and the
                   backing vocals, and in its head Apple's translation and its pronunciation of a line, the pronunciation
                   timed word by word (the translation taken in the Lyrics page's language); Musixmatch.m, matched by
-                  Spotify's track id with an anonymous token, word timed where it has richsync; NetEase.m, word timing from yrc for what the others only line time; LrcLib.m, open and
-                  keyless and timed by the line, the floor under the rest. color-lyrics is answered with whichever won
+                  Spotify's track id with an anonymous token, word timed where it has richsync; SpicyLyrics.m, which
+                  offers Apple Music syllable timing but sends Spotify's Authorization token to its API when enabled;
+                  NetEase.m, word timing from yrc for what the others only line time; LrcLib.m, open and keyless and
+                  timed by the line, the floor under the rest. The opt-in local-file setting searches by title, artist
+                  and duration through name-matching sources; Spicy Lyrics needs a Spotify track id and is skipped for
+                  local files. color-lyrics is answered with whichever won
                   (LyricsHook.x): Spotify's own 200 gets our lines swapped in; a track Spotify's metadata says has none has
                   its request sent to a donor track that does, so the reply is a real 200 (a 404 answered as a 200 in the
                   delegate alone never showed the card on 9.1.78); a 404 for a track not seen yet is held until the chain
@@ -256,7 +260,8 @@ is set. Redesigned UI is the one switch between the two looks (see Layers): it g
 The pages show only what the stored look has: a page opened after flipping the switch already shows
 what the restart will bring. Then a card of parts. Navbar: the tab editor of the stored look, each with
 its own list of tabs. Player: Gestures, Lyrics (the ordered list of lyrics sources, lyrics for every track,
-naming the source in the redesign, the lock screen, and glass lyrics in the native look; in the redesign also
+naming the source in the redesign, lock screen lyrics, and local-file lookup; in the native look also
+glass lyrics; in the redesign
 which of the lyrics, their pronunciation and their translation is set largest, and the translation's language), Blocked artists (with the count on the row) and Lock screen widget (its controls and, under Artwork, Animated lock screen, the track's Canvas or the album's Apple Music cover played behind the lock screen's controls, on until switched off, with a Sources page for their order, and a "Needs iOS 26" row below that), which work with either look;
 in the native look also Now playing bar (its device button and its flags), Queue & devices, and
 Spotify's own player screen (artwork background, glass header buttons, Disable Canvas and the sheet,

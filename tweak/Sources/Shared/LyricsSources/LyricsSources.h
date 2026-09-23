@@ -15,6 +15,7 @@
 #define SGKeyLyricsAllTracks @"spotifyglass.lyricsAllTracks"
 // Names the source the shown lines came from, on the full screen page.
 #define SGKeyLyricsCredit @"spotifyglass.lyricsCredit"
+#define SGKeyLyricsLocalFiles @"spotifyglass.lyricsLocalFiles"
 // The language a line's translation is asked for in, as an index into SGLyricsTranslationLanguages;
 // unset or 0 takes whatever translation the source has.
 #define SGKeyLyricsTranslationLanguage @"spotifyglass.lyricsTranslationLanguage"
@@ -40,7 +41,8 @@
 // What is known about the track when a source is asked. Only trackID is always there; the rest is
 // filled in by the player, and by whichever source answered before.
 @interface SGLyricsQuery : NSObject
-@property (nonatomic, copy) NSString *trackID;   // Spotify's base62 id
+@property (nonatomic, copy) NSString *trackID;   // Spotify's base62 id, or a spotify:local: URI
+@property (nonatomic) BOOL localFile;
 @property (nonatomic, copy) NSString *title, *artist, *album;
 @property (nonatomic) NSInteger seconds;
 @end
@@ -58,6 +60,8 @@ typedef void (^SGLyricsAsk)(SGLyricsQuery *query, void (^done)(SGLyricsResult *r
 // Searches by title and artist, so it has nothing to ask with until someone has named the track.
 // Musixmatch matches by Spotify's id and can go without.
 @property (nonatomic) BOOL needsName;
+// ID-only sources (Spicy Lyrics) cannot safely identify a local file.
+@property (nonatomic) BOOL supportsLocalFiles;
 @property (nonatomic, copy) SGLyricsAsk ask;
 @end
 
@@ -124,6 +128,7 @@ NSString *SGLyricsTranslationLanguage(void);
 // The sources themselves, each in its own file.
 extern SGLyricsAsk SGBiniLyricsAsk;
 extern SGLyricsAsk SGMusixmatchAsk;
+extern SGLyricsAsk SGSpicyLyricsAsk;
 extern SGLyricsAsk SGUnisonAsk;
 extern SGLyricsAsk SGNetEaseAsk;
 extern SGLyricsAsk SGLrcLibAsk;

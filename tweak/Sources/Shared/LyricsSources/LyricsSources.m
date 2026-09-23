@@ -148,13 +148,15 @@ NSArray<SGLyricsProvider *> *SGLyricsAllProviders(void) {
             provider.detail = detail;
             // A source that matches by Spotify's own track id has everything it needs from the
             // start; the rest wait for the player to name the track before they can search.
-            provider.needsName = ![key isEqualToString:@"musixmatch"];
+            provider.needsName = ![key isEqualToString:@"musixmatch"] && ![key isEqualToString:@"spicy"];
+            provider.supportsLocalFiles = ![key isEqualToString:@"spicy"];
             provider.ask = ask;
             return provider;
         };
         all = @[
             make(@"binilyrics", @"BiniLyrics", @"Apple Music word timing", SGBiniLyricsAsk),
             make(@"musixmatch", @"Musixmatch", @"Spotify's licensed catalogue", SGMusixmatchAsk),
+            make(@"spicy", @"Spicy Lyrics", @"Syllable timing; requires a Spotify ID and access token", SGSpicyLyricsAsk),
             make(@"unison", @"Unison", @"Hand-timed, few tracks", SGUnisonAsk),
             make(@"netease", @"NetEase", @"Word timing, censored", SGNetEaseAsk),
             make(@"lrclib", @"LRCLIB", @"Line timing, open fallback", SGLrcLibAsk),
@@ -207,6 +209,7 @@ BOOL SGLyricsEnabled(void) {
 static SGLyricsQuery *queryFor(NSString *trackID) {
     SGLyricsQuery *query = [SGLyricsQuery new];
     query.trackID = trackID;
+    query.localFile = SGKaraokeIsLocalTrackKey(trackID);
     SPTPlayerTrack *track = SGKaraokeTrackFor(trackID);
     if (!track) return query;
     query.title = track.trackTitle;
@@ -215,7 +218,18 @@ static SGLyricsQuery *queryFor(NSString *trackID) {
     id album = metadata[@"album_title"];
     id length = metadata[@"duration"];
     if ([album isKindOfClass:NSString.class]) query.album = album;
-    if ([length respondsToSelector:@selector(integerValue)]) query.seconds = [length integerValue] / 1000;
+    if ([length respondsToSelector:@selector(doubleValue)]) {
+        double value = [length doubleValue];
+        query.seconds = query.localFile ? (NSInteger)llround(value > 1000 ? value / 1000 : value)
+                                        : (NSInteger)value / 1000;
+    }
+    if (query.seconds <= 0 && query.localFile) {
+        id player = SGKaraokePlayer();
+        SPTPlayerState *state = [player respondsToSelector:@selector(state)] ? [(id<SPTPlayer>)player state] : nil;
+        id uri = state.track.URI;
+        NSString *current = [uri isKindOfClass:NSURL.class] ? ((NSURL *)uri).absoluteString : [uri description];
+        if ([current isEqualToString:trackID] && state.duration > 0) query.seconds = (NSInteger)llround(state.duration);
+    }
     return query;
 }
 
@@ -351,7 +365,13 @@ static void step(SGLyricsWalk *walk) {
         return;
     }
     SGLyricsProvider *provider = SGLyricsProviderFor(walk.order[walk.index++]);
-    if (provider.needsName && !named(query)) {
+    if (query.localFile && !provider.supportsLocalFiles) {
+        SGLog(@"lyrics: %@ skips %@, which needs a Spotify track id", query.trackID, provider.key);
+        step(walk);
+        return;
+    }
+    BOOL needsName = provider.needsName || (query.localFile && [provider.key isEqualToString:@"musixmatch"]);
+    if (needsName && !named(query)) {
         [walk.passedOver addObject:provider.key];
         step(walk);
         return;

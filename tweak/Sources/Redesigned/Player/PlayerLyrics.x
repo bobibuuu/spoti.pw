@@ -239,7 +239,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
 #pragma mark - opening and closing
 
 BOOL SGRPlayerLyricsAvailable(void) {
-    NSString *track = SGKaraokePlayingTrack();
+    NSString *track = SGKaraokePlayingTrackKey();
     return track != nil && SGKaraokeLinesForTrack(track) != nil;
 }
 

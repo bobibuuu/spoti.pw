@@ -64,6 +64,7 @@ static void rememberHeaders(NSURLSession *session, NSURLRequest *request) {
 
 static SPTPlayerState *playerState(void);
 static NSString *idOf(SPTPlayerTrack *track);
+static NSString *keyOf(SPTPlayerTrack *track);
 
 // The track after this one, when the player knows it.
 static SPTPlayerTrack *upNextIn(SPTPlayerState *state) {
@@ -78,7 +79,7 @@ static void keep(NSString *track, NSArray<SGKaraokeLine *> *lines) {
     if (sg_lyrics.count >= kKeptTracks && !sg_lyrics[track]) {
         NSMutableSet<NSString *> *spared = [sg_asking mutableCopy];
         SPTPlayerState *state = playerState();
-        NSString *playing = idOf(state.track), *next = idOf(upNextIn(state));
+        NSString *playing = keyOf(state.track), *next = keyOf(upNextIn(state));
         if (playing) [spared addObject:playing];
         if (next) [spared addObject:next];
         for (NSString *kept in sg_lyrics.allKeys) {
@@ -139,6 +140,7 @@ NSString *SGKaraokeSpotifyAuthorization(void) {
 }
 
 static void requestFromSpotify(NSString *trackID) {
+    if (SGKaraokeIsLocalTrackKey(trackID)) return;
     NSDictionary<NSString *, NSString *> *headers = sg_spclientHeaders;
     if (!headers) return;
     [sg_requested addObject:trackID];
@@ -179,7 +181,7 @@ static void requestFromSpotify(NSString *trackID) {
 
 void SGKaraokeAskSpotifyForTiming(NSString *trackID) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!trackID || [sg_requested containsObject:trackID]) return;
+        if (!trackID || SGKaraokeIsLocalTrackKey(trackID) || [sg_requested containsObject:trackID]) return;
         requestFromSpotify(trackID);
     });
 }
@@ -187,6 +189,7 @@ void SGKaraokeAskSpotifyForTiming(NSString *trackID) {
 void SGKaraokeRequestLyrics(NSString *trackID) {
     if (!trackID || sg_lyrics[trackID] || [sg_requested containsObject:trackID]) return;
     if (!sg_ownSources) {
+        if (SGKaraokeIsLocalTrackKey(trackID)) return;
         requestFromSpotify(trackID);
         return;
     }
@@ -199,6 +202,10 @@ void SGKaraokeRequestLyrics(NSString *trackID) {
             SGLyricsSetCredit(trackID, lyrics.provider);
             // Plain text is shown while Spotify is asked whether it has the song timed.
             if (SGKaraokeLinesTiming(lyrics.karaokeLines) != SGKaraokeTimingNone) return;
+        }
+        if (SGKaraokeIsLocalTrackKey(trackID)) {
+            if (!lyrics && SGLyricsMayHave(trackID)) askAgainLater(trackID);
+            return;
         }
         [sg_requested removeObject:trackID];
         requestFromSpotify(trackID);
@@ -238,6 +245,23 @@ static NSString *idOf(SPTPlayerTrack *track) {
     return [text hasPrefix:@"spotify:track:"] ? [text substringFromIndex:@"spotify:track:".length] : nil;
 }
 
+BOOL SGKaraokeIsLocalTrackKey(NSString *trackKey) {
+    return [trackKey hasPrefix:@"spotify:local:"];
+}
+
+static NSString *keyOf(SPTPlayerTrack *track) {
+    NSString *spotifyID = idOf(track);
+    if (spotifyID) return spotifyID;
+    if (!SGFlag(SGKeyLyricsLocalFiles, NO)) return nil;
+    id uri = track.URI;
+    NSString *text = [uri isKindOfClass:NSURL.class] ? ((NSURL *)uri).absoluteString : [uri description];
+    return SGKaraokeIsLocalTrackKey(text) ? text : nil;
+}
+
+NSString *SGKaraokePlayingTrackKey(void) {
+    return keyOf(playerState().track);
+}
+
 // Tracks come in from the player and from every list that reads their metadata, so when the table
 // is full it is emptied, all but the track playing, whose name the next lyrics request needs.
 static void remember(SPTPlayerTrack *track, NSString *trackID) {
@@ -245,7 +269,7 @@ static void remember(SPTPlayerTrack *track, NSString *trackID) {
         if (sg_seenTracks.count >= kSeenTracks) {
             [sg_seenTracks removeAllObjects];
             SPTPlayerTrack *playing = sg_lastSeen;
-            NSString *playingID = playing ? idOf(playing) : nil;
+            NSString *playingID = playing ? keyOf(playing) : nil;
             if (playingID) sg_seenTracks[playingID] = playing;
         }
         sg_seenTracks[trackID] = track;
@@ -259,7 +283,7 @@ SPTPlayerTrack *SGKaraokeTrackFor(NSString *trackID) {
 
 void SGKaraokeRememberTrack(SPTPlayerTrack *track) {
     if (!sg_seenTracks) return;
-    NSString *trackID = idOf(track);
+    NSString *trackID = keyOf(track);
     if (trackID) remember(track, trackID);
 }
 
@@ -271,7 +295,7 @@ static void prefetch(SPTPlayerTrack *track, NSString *trackID, SPTPlayerState *s
     if (!sg_ownSources) return;
     SGLyricsPrefetch(trackID);
     SPTPlayerTrack *next = upNextIn(state);
-    NSString *nextID = idOf(next);
+    NSString *nextID = keyOf(next);
     if (!nextID || [nextID isEqualToString:trackID]) return;
     remember(next, nextID);
     SGLyricsPrefetch(nextID);
@@ -284,7 +308,7 @@ static void prefetch(SPTPlayerTrack *track, NSString *trackID, SPTPlayerState *s
     SPTPlayerTrack *track = state.track;
     if (track && track != sg_lastSeen) {
         sg_lastSeen = track;
-        NSString *trackID = idOf(track);
+        NSString *trackID = keyOf(track);
         if (trackID && ![trackID isEqualToString:sg_lastSeenID]) {
             sg_lastSeenID = trackID;
             remember(track, trackID);
@@ -320,7 +344,8 @@ static void prefetch(SPTPlayerTrack *track, NSString *trackID, SPTPlayerState *s
 %ctor {
     // The sources that search by name learn the name from the player, so the player is caught
     // whenever one is on, not only for the redesign's lyrics and the lock screen.
-    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsEnabled()) return;
+    BOOL localFiles = SGFlag(SGKeyLyricsLocalFiles, NO);
+    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsEnabled() && !localFiles) return;
     sg_seenTracks = [NSMutableDictionary dictionary];
     sg_lyrics = [NSMutableDictionary dictionary];
     sg_requested = [NSMutableSet set];

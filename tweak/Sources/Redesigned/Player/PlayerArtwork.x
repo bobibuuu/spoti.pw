@@ -19,6 +19,7 @@ static const CGFloat kPausedScale = 0.84, kPausedScaleReduceMotion = 0.92;
 static const CGFloat kCoverMinWidth = 200;
 
 static char kPlateKey;
+static char kLocalArtworkKey;
 static NSHashTable<UIView *> *sg_tilts;
 // The cover of each tilt view once found. A frame Spotify sets on a scaled view becomes its scaled
 // size, leaving bounds that no longer match the tilt view's, so the cover is not looked for by size again.
@@ -73,6 +74,26 @@ static UIView *showingTilt(void) {
         if (!hidden) return tilt;
     }
     return nil;
+}
+
+// Local files can have artwork in the system's now-playing info even when Spotify's cover cell has
+// no image. Fill that cell from the Kit's track-checked bridge once the matching still is available.
+static void showLocalArtwork(void) {
+    SPTPlayerTrack *track = SGPlayerState().track;
+    NSString *uri = SGURIString(track.URI);
+    if (![uri hasPrefix:@"spotify:local:"]) return;
+    NSString *artworkURI = nil;
+    UIImage *image = SGRNowPlayingArtwork(&artworkURI, NULL);
+    if (!image || ![artworkURI isEqualToString:uri]) return;
+    UIView *tilt = showingTilt();
+    UIView *cover = tilt ? coverIn(tilt) : nil;
+    UIView *holder = cover ? SGRFindByIdentifier(cover, @"Encore.ImageView", &kLocalArtworkKey) : nil;
+    if (!holder) return;
+    for (UIView *subview in holder.subviews) {
+        if (![subview isKindOfClass:UIImageView.class]) continue;
+        UIImageView *imageView = (UIImageView *)subview;
+        if (imageView.image != image) imageView.image = image;
+    }
 }
 
 UIView *SGRPlayerCoverList(void) {
@@ -153,6 +174,7 @@ static void scaleEveryCover(BOOL animated) {
     plate.center = cover.center;
     // The same value an animation in flight is heading to, so a layout pass never cuts one short.
     scaleCover(tilt, currentScale());
+    showLocalArtwork();
 
     static dispatch_once_t once;
     dispatch_once(&once, ^{ SGLog(@"redesign player: cover %@ rounded %.0f with a shadow plate, scale %.2f", NSStringFromClass(cover.class), SGRRadiusArtwork, currentScale()); });
@@ -211,6 +233,9 @@ static SGRPlayerArtworkWatcher *sg_artworkWatcher;
         static dispatch_once_t once;
         dispatch_once(&once, ^{ SGLog(@"redesign player: transition over, cover scale %.2f", currentScale()); });
     });
+    [NSNotificationCenter.defaultCenter addObserverForName:SGRNowPlayingArtworkDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        showLocalArtwork();
+    }];
     SGRequireClasses(@[
         @"_TtC35CreativeWorkCommons_CoverArtTiltKit16CoverArtTiltView",
         @"_TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl",

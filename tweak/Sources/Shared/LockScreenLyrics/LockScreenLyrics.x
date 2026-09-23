@@ -65,7 +65,7 @@ static NSString *lineFor(NSDictionary *info, double elapsed) {
     SPTPlayerState *state = [(id<SPTPlayer>)SGKaraokePlayer() state];
     // The player's track can lag behind the now playing info; its lyrics would then be another song's.
     if (![state.track.trackTitle isEqualToString:info[MPMediaItemPropertyTitle]]) return nil;
-    NSString *trackID = SGKaraokePlayingTrack();
+    NSString *trackID = SGKaraokePlayingTrackKey();
     NSArray<SGKaraokeLine *> *lines = SGKaraokeLinesForTrack(trackID);
     if (!lines) {
         SGKaraokeRequestLyrics(trackID);

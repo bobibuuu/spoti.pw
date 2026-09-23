@@ -201,6 +201,49 @@ static SGLyricsResult *fromSubtitles(id body) {
     return lyrics.karaokeLines ? lyrics : nil;
 }
 
+// The public matcher returns LRC for a title-and-artist lookup. Keep each timestamp, including
+// repeated timestamps on one line, and add an end marker so karaoke timing can estimate line ends.
+static SGLyricsResult *fromLRC(NSString *body, NSInteger duration) {
+    if (![body isKindOfClass:NSString.class] || !body.length) return nil;
+    NSRegularExpression *tag = [NSRegularExpression regularExpressionWithPattern:@"\\[(\\d{1,2}):(\\d{2})(?:[\\.:](\\d{1,3}))?\\]" options:0 error:nil];
+    NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+    for (NSString *raw in [body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        NSArray<NSTextCheckingResult *> *matches = [tag matchesInString:raw options:0 range:NSMakeRange(0, raw.length)];
+        if (!matches.count) continue;
+        NSString *text = [[tag stringByReplacingMatchesInString:raw options:0 range:NSMakeRange(0, raw.length) withTemplate:@""]
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (!text.length) continue;
+        for (NSTextCheckingResult *match in matches) {
+            NSInteger minutes = [[raw substringWithRange:[match rangeAtIndex:1]] integerValue];
+            NSInteger seconds = [[raw substringWithRange:[match rangeAtIndex:2]] integerValue];
+            NSRange fractionRange = [match rangeAtIndex:3];
+            NSInteger fraction = fractionRange.location == NSNotFound ? 0 : [[raw substringWithRange:fractionRange] integerValue];
+            NSUInteger digits = fractionRange.location == NSNotFound ? 0 : fractionRange.length;
+            NSInteger milliseconds = digits == 1 ? fraction * 100 : digits == 2 ? fraction * 10 : fraction;
+            [entries addObject:@{@"start": @((minutes * 60 + seconds) * 1000 + milliseconds), @"text": text}];
+        }
+    }
+    [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"start"] compare:b[@"start"]];
+    }];
+    if (!entries.count) return nil;
+    NSMutableArray<NSNumber *> *starts = [NSMutableArray array];
+    NSMutableArray<NSString *> *texts = [NSMutableArray array];
+    for (NSDictionary *entry in entries) {
+        [starts addObject:entry[@"start"]];
+        [texts addObject:entry[@"text"]];
+    }
+    NSInteger end = duration > 0 ? duration * 1000 : starts.lastObject.integerValue + 5000;
+    [starts addObject:@(MAX(end, starts.lastObject.integerValue + 1))];
+    [texts addObject:@""];
+    SGLyricsResult *lyrics = [SGLyricsResult new];
+    lyrics.synced = YES;
+    lyrics.starts = starts;
+    lyrics.texts = texts;
+    lyrics.karaokeLines = SGKaraokeEstimatedLines(starts, texts);
+    return lyrics.karaokeLines.count ? lyrics : nil;
+}
+
 static SGLyricsResult *fromPlain(id body) {
     if (![body isKindOfClass:NSString.class] || ![body length]) return nil;
     NSMutableArray<NSNumber *> *starts = [NSMutableArray array];
@@ -257,25 +300,51 @@ static SGLyricsResult *withTrack(SGLyricsResult *lyrics, id track) {
     return result;
 }
 
-static void ask(NSString *trackID, BOOL renewToken) {
+static void ask(SGLyricsQuery *query, BOOL renewToken) {
+    NSString *trackID = query.trackID;
     withToken(^(NSString *token) {
         if (!token) {
             finish(trackID, nil, NO);
             return;
         }
-        call(@"macro.subtitles.get", @{
+        if (query.localFile) {
+            NSMutableDictionary<NSString *, NSString *> *parameters = [@{
+                @"usertoken": token,
+                @"q_track": query.title,
+                @"q_artist": query.artist,
+                @"subtitle_format": @"lrc",
+            } mutableCopy];
+            if (query.seconds > 0) {
+                parameters[@"f_subtitle_length"] = [NSString stringWithFormat:@"%ld", (long)query.seconds];
+                parameters[@"f_subtitle_length_max_deviation"] = @"4";
+            }
+            call(@"matcher.subtitle.get", parameters, ^(NSDictionary *message) {
+                NSInteger status = [dig(message, @"header/status_code") integerValue];
+                if (status == 401 && renewToken) {
+                    [NSUserDefaults.standardUserDefaults removeObjectForKey:kTokenKey];
+                    ask(query, NO);
+                    return;
+                }
+                NSString *body = dig(message, @"body/subtitle/subtitle_body");
+                SGLyricsResult *lyrics = status == 200 ? fromLRC(body, query.seconds) : nil;
+                finish(trackID, lyrics, status == 200);
+            });
+            return;
+        }
+        NSMutableDictionary<NSString *, NSString *> *parameters = [@{
             @"usertoken": token,
-            @"track_spotify_id": trackID,
             @"namespace": @"lyrics_richsynched",
             @"subtitle_format": @"mxm",
             @"optional_calls": @"track.richsync",
             @"richsync_compact_type": @"words",
-        }, ^(NSDictionary *message) {
+        } mutableCopy];
+        parameters[@"track_spotify_id"] = trackID;
+        call(@"macro.subtitles.get", parameters, ^(NSDictionary *message) {
             NSInteger status = [dig(message, @"header/status_code") integerValue];
             if (status == 401 && renewToken) {
                 SGLog(@"musixmatch: token no longer accepted (hint %@), asking for a new one", dig(message, @"header/hint"));
                 [NSUserDefaults.standardUserDefaults removeObjectForKey:kTokenKey];
-                ask(trackID, NO);
+                ask(query, NO);
                 return;
             }
             id calls = dig(message, @"body/macro_calls");
@@ -296,7 +365,7 @@ static void ask(NSString *trackID, BOOL renewToken) {
 SGLyricsAsk SGMusixmatchAsk = ^(SGLyricsQuery *query, void (^done)(SGLyricsResult *lyrics)) {
     setUp();
     NSString *trackID = query.trackID;
-    if (!trackID.length) {
+    if (!trackID.length || (query.localFile && (!query.title.length || !query.artist.length))) {
         done(nil);
         return;
     }
@@ -311,5 +380,5 @@ SGLyricsAsk SGMusixmatchAsk = ^(SGLyricsQuery *query, void (^done)(SGLyricsResul
         return;
     }
     sg_waiting[trackID] = [NSMutableArray arrayWithObject:[done copy]];
-    ask(trackID, YES);
+    ask(query, YES);
 };

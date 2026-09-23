@@ -15,6 +15,7 @@ SGModSection *SGLyricsSourcesSection(BOOL namingSource) {
     NSMutableArray<SGModRow *> *rows = [NSMutableArray arrayWithObjects:sources,
         SGOptionRow(@"Lyrics for every track", @"Even where Spotify has none", SGKeyLyricsAllTracks), nil];
     if (namingSource) [rows addObject:SGOptionRow(@"Show source", nil, SGKeyLyricsCredit)];
+    [rows addObject:SGOptionRow(@"Local files", @"Search lyrics by title, artist, and duration", SGKeyLyricsLocalFiles)];
     return SGSection(@"Sources", rows);
 }
 

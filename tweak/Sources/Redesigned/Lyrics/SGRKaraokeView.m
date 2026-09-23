@@ -1643,7 +1643,7 @@ typedef struct {
 }
 
 - (void)tick {
-    NSString *track = SGKaraokePlayingTrack();
+    NSString *track = SGKaraokePlayingTrackKey();
     if (!(track == _track || [track isEqualToString:_track])) {
         SGLog(@"karaoke: page shows track %@, lyrics %@", track, SGKaraokeLinesForTrack(track) ? @"captured" : @"not captured yet");
         _track = track;

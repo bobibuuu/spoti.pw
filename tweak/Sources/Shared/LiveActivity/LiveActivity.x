@@ -152,7 +152,7 @@ static void tick(void) API_AVAILABLE(ios(17.0)) {
     SPTPlayerState *state = player.state;
     SPTPlayerTrack *track = state.track;
     if (!track.trackTitle.length) return;
-    NSString *trackID = SGKaraokePlayingTrack();
+    NSString *trackID = SGKaraokePlayingTrackKey();
     checkSleepTimer(player, state, trackID);
 
     NSInteger view = SGInt(SGKeyLiveActivityView, SGLiveActivityLyrics);
@@ -239,7 +239,7 @@ static void runAction(NSString *action) {
             clearSleepTimer();
         } else if ([value isEqualToString:@"track"]) {
             clearSleepTimer();
-            sg_sleepTrack = SGKaraokePlayingTrack();
+            sg_sleepTrack = SGKaraokePlayingTrackKey();
         } else if ([value isEqualToString:@"add"]) {
             NSDate *from = sg_sleepEnd && sg_sleepEnd.timeIntervalSinceNow > 0 ? sg_sleepEnd : [NSDate date];
             sg_sleepEnd = [from dateByAddingTimeInterval:15 * 60];

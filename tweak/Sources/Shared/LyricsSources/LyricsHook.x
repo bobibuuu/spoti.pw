@@ -12,6 +12,7 @@ static NSString *const kDonorTrack = @"0VjIjW4GlUZAMYd2vXMi3b";
 static NSString *const kLyricsPath = @"/color-lyrics/v2/track/";
 static NSString *const kCardListPath = @"/scrollsita/";
 static NSString *const kTrackPrefix = @"spotify:track:";
+static NSString *const kLocalPrefix = @"spotify:local:";
 // On a request sent to the donor, the track it really asks for.
 static NSString *const kDonorForKey = @"spotifyglass.lyricsDonorFor";
 static NSString *const kUnnamedProvider = @"spoti.pw";
@@ -51,6 +52,7 @@ typedef NS_ENUM(NSInteger, SGLyricsTaskKind) {
 static char kStateKey, kAnswerKey;
 static NSData *sg_sectionTemplate;
 static os_unfair_lock sg_templateLock = OS_UNFAIR_LOCK_INIT;
+static BOOL sg_everyTrack;
 
 #pragma mark - reading requests
 
@@ -61,14 +63,27 @@ static NSString *lyricsTrack(NSURL *url) {
     NSString *rest = [path substringFromIndex:NSMaxRange(marker)];
     NSRange slash = [rest rangeOfString:@"/"];
     NSString *track = slash.location == NSNotFound ? rest : [rest substringToIndex:slash.location];
+    track = track.stringByRemovingPercentEncoding ?: track;
+    if ([track hasPrefix:kLocalPrefix]) return SGFlag(SGKeyLyricsLocalFiles, NO) ? track : nil;
     return track.length ? track : nil;
+}
+
+static NSString *keyFromURI(NSString *uri) {
+    if ([uri hasPrefix:kTrackPrefix] && uri.length > kTrackPrefix.length) return [uri substringFromIndex:kTrackPrefix.length];
+    if ([uri hasPrefix:kLocalPrefix] && SGFlag(SGKeyLyricsLocalFiles, NO)) return uri;
+    return nil;
+}
+
+static NSString *uriForKey(NSString *key) {
+    return SGKaraokeIsLocalTrackKey(key) ? key : [kTrackPrefix stringByAppendingString:key ?: @""];
 }
 
 static NSString *cardListTrack(NSURL *url) {
     if (![url.path containsString:kCardListPath]) return nil;
     for (NSString *component in url.pathComponents) {
         NSString *uri = component.stringByRemovingPercentEncoding ?: component;
-        if ([uri hasPrefix:kTrackPrefix] && uri.length > kTrackPrefix.length) return [uri substringFromIndex:kTrackPrefix.length];
+        NSString *key = keyFromURI(uri);
+        if (key) return key;
     }
     return nil;
 }
@@ -81,7 +96,7 @@ static NSString *donorFor(NSURLRequest *request) {
 static NSString *trackOf(SPTPlayerTrack *track) {
     id uri = track.URI;
     NSString *text = [uri isKindOfClass:NSURL.class] ? [uri absoluteString] : [uri description];
-    return [text hasPrefix:kTrackPrefix] && text.length > kTrackPrefix.length ? [text substringFromIndex:kTrackPrefix.length] : nil;
+    return keyFromURI(text);
 }
 
 static NSURL *urlOf(NSURLSessionTask *task) {
@@ -93,11 +108,12 @@ static NSURL *urlOf(NSURLSessionTask *task) {
 // Only a real 200 makes the lyrics card show, so a track Spotify has none for is asked for as the
 // donor, whose reply then carries the sources' lines. Everything but the id stays as Spotify sent it.
 static NSURLRequest *donorRequestFor(NSURLRequest *request) {
+    if (!SGFlag(SGKeyLyricsAllTracks, NO)) return nil;
     NSString *address = request.URL.absoluteString;
     if (![address containsString:kLyricsPath]) return nil;
     if ([NSURLProtocol propertyForKey:SGLyricsOwnRequestKey inRequest:request] || donorFor(request)) return nil;
     NSString *track = lyricsTrack(request.URL);
-    if (!track || [track isEqualToString:kDonorTrack]) return nil;
+    if (!track || SGKaraokeIsLocalTrackKey(track) || [track isEqualToString:kDonorTrack]) return nil;
     if (SGLyricsSpotifyHas(track) != 0 || !SGLyricsMayHave(track)) return nil;
     NSRange range = [address rangeOfString:[kLyricsPath stringByAppendingString:track]];
     if (range.location == NSNotFound) return nil;
@@ -198,7 +214,7 @@ static BOOL isLyricsSection(NSData *section) {
 // A lyrics section Spotify sent for another track carries whatever else a section holds; one made from
 // nothing has only the track.
 static NSData *lyricsSection(NSString *track) {
-    NSData *lyrics = SGPBSerialize(@[SGPBString(1, [kTrackPrefix stringByAppendingString:track])]);
+    NSData *lyrics = SGPBSerialize(@[SGPBString(1, uriForKey(track))]);
     NSMutableArray<SGPBField *> *fields = SGPBParse(sectionTemplate(nil));
     for (SGPBField *field in fields) {
         if (field.number != 5 || field.wire != 2) continue;
@@ -560,6 +576,8 @@ static void completed(id delegate, NSURLSession *session, NSURLSessionTask *task
     NSDictionary *metadata = %orig;
     NSString *track = trackOf(self);
     if (!track) return metadata;
+    BOOL local = SGKaraokeIsLocalTrackKey(track);
+    if ((local && !SGFlag(SGKeyLyricsLocalFiles, NO)) || (!local && !sg_everyTrack)) return metadata;
     BOOL has = [@"true" isEqual:metadata[@"has_lyrics"]];
     SGLyricsNoteSpotifyHas(track, has);
     SGKaraokeRememberTrack(self);
@@ -592,19 +610,21 @@ static void completed(id delegate, NSURLSession *session, NSURLSessionTask *task
 
 %ctor {
     SGLyricsMigrateLegacyKeys();
-    if (!SGLyricsEnabled()) return;
+    BOOL localFiles = SGFlag(SGKeyLyricsLocalFiles, NO);
+    if (!SGLyricsEnabled() && !localFiles) return;
     %init(SGLyricsReplies);
     BOOL everyTrack = SGFlag(SGKeyLyricsAllTracks, NO);
-    if (everyTrack) {
+    if (everyTrack || localFiles) {
         // The generator gives a class that only inherits the method an override of its own, which would
         // put a second hook in front of NSURLSession's.
         SEL selector = @selector(dataTaskWithRequest:);
         Class local = objc_getClass("__NSURLSessionLocal");
         Method own = local ? ownMethod(local, selector) : NULL;
         BOOL hookLocal = own && method_getImplementation(own) != method_getImplementation(class_getInstanceMethod(NSURLSession.class, selector));
+        sg_everyTrack = everyTrack;
         %init(SGLyricsEveryTrack);
         if (hookLocal) %init(SGLyricsLocalSession);
     }
-    SGLog(@"lyrics: sources %@, every track %@", [SGLyricsOrder() componentsJoinedByString:@", "], everyTrack ? @"on" : @"off");
+    SGLog(@"lyrics: sources %@, every track %@, local files %@", [SGLyricsOrder() componentsJoinedByString:@", "], everyTrack ? @"on" : @"off", localFiles ? @"on" : @"off");
     SGRequireClasses(@[@"SPTPlayerTrack", @"SPTDataLoaderService", @"_TtC26Connectivity_HttpClientKit20HttpClientURLSession"]);
 }

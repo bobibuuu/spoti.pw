@@ -2,6 +2,7 @@
 // links are Shared's (Shared/Player/PlayerState.h, Shared/Player/PlayerEvents.h,
 // Shared/Navigation/Links.h). SGRBridges.h names the hook and why it is the one.
 #import "Core/SGCore.h"
+#import <MediaPlayer/MediaPlayer.h>
 #import "Shared/Player/PlayerEvents.h"
 #import "SGRBridges.h"
 #import "SGRedesign.h"
@@ -22,6 +23,8 @@ static NSString *sg_wantedURI, *sg_wantedKey;
 // these while another picture is wanted is showing the last track's.
 static NSMapTable<UIImage *, NSString *> *sg_published;
 static NSURLSessionDataTask *sg_fetch;
+static UIImage *sg_systemArtwork;
+static NSString *sg_systemArtworkTitle;
 
 // Retries of a fetch that failed, and how long before each.
 static const NSTimeInterval kFetchRetry = 2;
@@ -122,6 +125,15 @@ static void fetchPicture(NSString *key, NSURL *url, NSUInteger attempt) {
     [sg_fetch resume];
 }
 
+static void publishSystemArtwork(SPTPlayerTrack *track, NSString *uri) {
+    if (!track || !uri || pictureOf(track, NULL) || !sg_systemArtwork) return;
+    if (sg_systemArtworkTitle.length && track.trackTitle.length && ![sg_systemArtworkTitle isEqualToString:track.trackTitle]) return;
+    NSString *key = [@"track:" stringByAppendingString:uri];
+    if ([sg_artworkKey isEqualToString:key] && sg_artworkQuality >= SGRArtworkQualityHigh) return;
+    artworkLog(@"%@ uses its now-playing artwork as the full-player cover", uri);
+    publish(sg_systemArtwork, key, SGRArtworkQualityHigh);
+}
+
 // Brings the playing track's picture up to date with the player's state, and fetches a picture newly
 // wanted. Called on every state report and before any view read is believed, whichever comes first.
 static void followPlayer(void) {
@@ -134,12 +146,16 @@ static void followPlayer(void) {
     NSURL *url = nil;
     // A track whose metadata names no picture is its own key: only the screens can show it then.
     NSString *key = pictureOf(track, &url) ?: [@"track:" stringByAppendingString:uri];
-    if ([key isEqualToString:sg_wantedKey]) return;
+    if ([key isEqualToString:sg_wantedKey]) {
+        publishSystemArtwork(track, uri);
+        return;
+    }
     sg_wantedKey = key;
     [sg_fetch cancel];
     sg_fetch = nil;
     if ([key isEqualToString:sg_artworkKey] && sg_artworkQuality == SGRArtworkQualityExact) return;
     if (url) fetchPicture(key, url, 0);
+    else publishSystemArtwork(track, uri);
 }
 
 void SGRSetNowPlayingArtwork(UIImage *image, NSString *trackURI, SGRArtworkQuality quality) {
@@ -230,6 +246,24 @@ static SGRBarArtworkWatcher *sg_barWatcher;
 %end
 %end
 
+%group SGRNowPlayingArtworkHooks
+%hook MPNowPlayingInfoCenter
+- (void)setNowPlayingInfo:(NSDictionary *)info {
+    id artwork = info[MPMediaItemPropertyArtwork];
+    UIImage *image = [artwork respondsToSelector:@selector(imageWithSize:)]
+        ? [artwork imageWithSize:CGSizeMake(800, 800)] : nil;
+    NSString *title = [info[MPMediaItemPropertyTitle] isKindOfClass:NSString.class] ? info[MPMediaItemPropertyTitle] : nil;
+    %orig;
+    if (!image) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        sg_systemArtwork = image.imageByPreparingForDisplay ?: image;
+        sg_systemArtworkTitle = title;
+        followPlayer();
+    });
+}
+%end
+%end
+
 #pragma mark - the player's open and close
 
 BOOL SGRPlayerIsTransitioning(void) {
@@ -286,5 +320,6 @@ void SGRObservePlayerTransition(id owner, void (^began)(id owner), void (^ended)
     sg_barWatcher = [SGRBarArtworkWatcher new];
     SGAddPlayerStateObserver(sg_barWatcher);
     %init(SGRBarArtworkHooks);
+    %init(SGRNowPlayingArtworkHooks);
     SGRequireClasses(@[@"_TtC18NowPlaying_BarImpl27NowPlayingBarViewController"]);
 }

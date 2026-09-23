@@ -13,7 +13,7 @@ static char kKaraokeKey;
     UIView *host = (UIView *)self;
     SGRKaraokeView *view = objc_getAssociatedObject(host, &kKaraokeKey);
     if (!view) {
-        SGLog(@"karaoke: page opened, playing %@", SGKaraokePlayingTrack());
+        SGLog(@"karaoke: page opened, playing %@", SGKaraokePlayingTrackKey());
         view = [[SGRKaraokeView alloc] initWithFrame:host.bounds];
         objc_setAssociatedObject(host, &kKaraokeKey, view, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
