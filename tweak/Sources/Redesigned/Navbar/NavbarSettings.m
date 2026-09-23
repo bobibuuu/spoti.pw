@@ -134,6 +134,7 @@ static NSArray<NSDictionary *> *openablePresets(void) {
 
 @interface SGRTabIconPickerPage : SGPage <UISearchBarDelegate, UISearchResultsUpdating>
 - (instancetype)initWithDraft:(NSMutableDictionary *)draft;
+- (void)updateSymbolHint;
 @end
 
 @interface SGRTabEditorPage : SGPage <UITextFieldDelegate>
@@ -280,8 +281,7 @@ static NSArray<NSDictionary *> *openablePresets(void) {
     } else {
         SGFillCell(cell, @"Enter a custom link…", @"Paste a Spotify share link or spotify: URI", nil, @"link");
     }
-    if (path.section == 0) { UIImageView *checkmark=SGSymbolView(@"checkmark",14,UIImageSymbolWeightSemibold,20); checkmark.tintColor=UIColor.whiteColor; cell.accessoryView=checkmark; cell.accessoryType=UITableViewCellAccessoryNone; }
-    else cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.selectionStyle=UITableViewCellSelectionStyleDefault; return cell;
 }
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
@@ -369,7 +369,7 @@ static NSArray<NSString *> *SGRTabEncoreIconNames(void) {
     return names;
 }
 
-// Keep the first screen useful; the search bar below searches the full SF Symbols catalog.
+// Keep the initial SF Symbols list focused on common tab icons; search still covers the full catalog.
 static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     static NSArray<NSString *> *names;
     static dispatch_once_t once;
@@ -381,23 +381,11 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
             @"bolt.fill", @"play.circle.fill", @"shuffle", @"repeat", @"antenna.radiowaves.left.and.right", @"ear", @"guitar", @"pianokeys", @"drum", @"ticket.fill",
             @"calendar", @"mappin.and.ellipse", @"bag.fill", @"tv.fill", @"video.fill", @"speaker.wave.2.fill", @"airplayaudio", @"ellipsis.circle.fill", @"clock.fill", @"arrow.up.right.circle.fill",
         ];
-        NSArray<NSString *> *catalog = SGSFSymbolCatalog();
-        NSSet<NSString *> *catalogSet = [NSSet setWithArray:catalog];
-        NSMutableArray<NSString *> *ranked = [NSMutableArray array];
-        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        NSMutableArray<NSString *> *available = [NSMutableArray array];
         for (NSString *name in candidates) {
-            if ([catalogSet containsObject:name] && ![seen containsObject:name]) {
-                [seen addObject:name];
-                [ranked addObject:name];
-            }
+            if ([UIImage systemImageNamed:name]) [available addObject:name];
         }
-        for (NSString *name in catalog) {
-            if (![seen containsObject:name]) {
-                [seen addObject:name];
-                [ranked addObject:name];
-            }
-        }
-        names = [ranked copy];
+        names = [available copy];
     });
     return names;
 }
@@ -405,15 +393,12 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
 @implementation SGRTabIconPickerPage {
     NSMutableDictionary *_draft;
     UISegmentedControl *_catalog;
+    UILabel *_symbolHint;
     UISearchController *_searchController;
     UISearchBar *_searchBar;
     NSArray<NSString *> *_encore;
     NSArray<NSString *> *_symbols;
     NSArray<NSString *> *_displayedIcons;
-    NSUInteger _candidateOffset;
-    BOOL _isLoadingIcons;
-    NSString *_lastQuery;
-    NSInteger _lastCatalogIndex;
     NSUInteger _searchGeneration;
 }
 
@@ -422,7 +407,6 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     _draft = draft;
     _encore = SGRTabEncoreIconNames();
     _symbols = SGRTabSFSymbolNames();
-    _lastCatalogIndex = NSNotFound;
     self.title = @"Choose an Icon";
     return self;
 }
@@ -443,6 +427,13 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     [header addSubview:_catalog];
     self.tableView.tableHeaderView = header;
 
+    _symbolHint = [UILabel new];
+    _symbolHint.text = @"Use search to find any SF Symbol";
+    _symbolHint.textColor = SGGrey();
+    _symbolHint.font = [UIFont systemFontOfSize:13];
+    _symbolHint.textAlignment = NSTextAlignmentCenter;
+    _symbolHint.numberOfLines = 2;
+
     _searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
     _searchController.searchResultsUpdater = self;
     _searchController.obscuresBackgroundDuringPresentation = NO;
@@ -455,6 +446,7 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     _searchBar.delegate = self;
     self.definesPresentationContext = YES;
 
+    [self updateSymbolHint];
     [self refreshIconResults];
     [self updateToolbar];
 }
@@ -483,27 +475,31 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     }
     CGFloat controlWidth = MIN(MAX(0, width - 32), 280);
     _catalog.frame = CGRectMake((width - controlWidth) / 2, 7, controlWidth, 34);
+    if (_symbolHint.frame.size.width != width) {
+        _symbolHint.frame = CGRectMake(0, 0, width, 52);
+        if (self.tableView.tableFooterView == _symbolHint) self.tableView.tableFooterView = _symbolHint;
+    }
     self.tableView.tintColor = UIColor.whiteColor;
+}
+
+- (void)updateSymbolHint {
+    CGFloat width = self.tableView.bounds.size.width;
+    _symbolHint.frame = CGRectMake(0, 0, width, 52);
+    self.tableView.tableFooterView = _catalog.selectedSegmentIndex == 1 ? _symbolHint : nil;
 }
 
 - (void)updateToolbar {
     if (!self.navigationController) return;
     [self.navigationController setToolbarHidden:NO animated:NO];
     self.navigationController.toolbar.tintColor = UIColor.whiteColor;
-    NSMutableArray<UIBarButtonItem *> *items = [NSMutableArray array];
-    if (_catalog.selectedSegmentIndex == 1) {
-        UIBarButtonItem *choose = [[UIBarButtonItem alloc] initWithTitle:@"SF Symbol…" style:UIBarButtonItemStylePlain target:self action:@selector(chooseDifferentSymbol)];
-        [items addObject:choose];
-    }
     if (@available(iOS 26.0, *)) {
         self.navigationItem.preferredSearchBarPlacement = UINavigationItemSearchBarPlacementIntegratedButton;
         self.navigationItem.searchBarPlacementAllowsToolbarIntegration = YES;
-        [items addObject:[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil]];
-        [items addObject:self.navigationItem.searchBarPlacementBarButtonItem];
+        UIBarButtonItem *space = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+        self.toolbarItems = @[space, self.navigationItem.searchBarPlacementBarButtonItem];
     } else {
-        if (items.count) [items addObject:[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil]];
+        self.toolbarItems = @[];
     }
-    self.toolbarItems = items;
 }
 
 - (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
@@ -534,39 +530,25 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
 
 - (void)catalogChanged:(UISegmentedControl *)sender {
     _searchGeneration++;
-    _lastCatalogIndex = NSNotFound;
     [self refreshIconResults];
     [self.tableView reloadData];
-    [self updateToolbar];
+    [self updateSymbolHint];
 }
 
 - (void)refreshIconResults {
     NSString *query = [[(_searchBar.text ?: @"") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] copy];
-    if (_lastCatalogIndex != _catalog.selectedSegmentIndex || ![_lastQuery isEqualToString:query]) {
-        _lastCatalogIndex = _catalog.selectedSegmentIndex;
-        _lastQuery = query;
-        _candidateOffset = 0;
-        _displayedIcons = @[];
+    if (!query.length) {
+        _displayedIcons = _catalog.selectedSegmentIndex == 0 ? _encore : _symbols;
+        return;
     }
-    [self loadNextIconBatch];
-}
-
-- (void)loadNextIconBatch {
-    if (_isLoadingIcons || !_catalog) return;
-    NSArray<NSString *> *source = _catalog.selectedSegmentIndex == 0 ? _encore : _symbols;
-    NSString *query = _lastQuery ?: @"";
-    NSMutableArray<NSString *> *results = [_displayedIcons mutableCopy] ?: [NSMutableArray array];
-    NSUInteger added = 0;
-    _isLoadingIcons = YES;
-    while (_candidateOffset < source.count && added < 50) {
-        NSString *name = source[_candidateOffset++];
+    NSArray<NSString *> *source = _catalog.selectedSegmentIndex == 0 ? _encore : SGSFSymbolCatalog();
+    NSMutableArray<NSString *> *matches = [NSMutableArray array];
+    for (NSString *name in source) {
         if (query.length && [name rangeOfString:query options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
         if (_catalog.selectedSegmentIndex == 1 && ![UIImage systemImageNamed:name]) continue;
-        [results addObject:name];
-        added++;
+        [matches addObject:name];
     }
-    _displayedIcons = [results copy];
-    _isLoadingIcons = NO;
+    _displayedIcons = [matches copy];
 }
 
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section { return (NSInteger)_displayedIcons.count; }
@@ -585,18 +567,6 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     return cell;
 }
 
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-    if (scrollView != self.tableView || _isLoadingIcons) return;
-    NSArray<NSString *> *source = _catalog.selectedSegmentIndex == 0 ? _encore : _symbols;
-    if (_candidateOffset >= source.count) return;
-    CGFloat remaining = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.size.height);
-    if (remaining < 52.0 * 3.0) {
-        NSUInteger previousCount = _displayedIcons.count;
-        [self loadNextIconBatch];
-        if (_displayedIcons.count != previousCount) [self.tableView reloadData];
-    }
-}
-
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
     NSString *name = _displayedIcons[(NSUInteger)path.row];
     _draft[SGRNavbarIcon] = _catalog.selectedSegmentIndex == 0 ? name : [@"sf:" stringByAppendingString:name];
@@ -604,32 +574,6 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     [self.navigationController popViewControllerAnimated:YES];
 }
 
-- (void)chooseDifferentSymbol {
-    NSString *current = _draft[SGRNavbarIcon];
-    NSString *value = [current hasPrefix:@"sf:"] ? [current substringFromIndex:3] : @"";
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Choose an SF Symbol" message:@"Enter the exact name of any SF Symbol available on this iOS version." preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"e.g. music.note";
-        field.text = value;
-        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        field.autocorrectionType = UITextAutocorrectionTypeNo;
-        field.clearButtonMode = UITextFieldViewModeWhileEditing;
-    }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Use Symbol" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *name = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if (!name.length || ![UIImage systemImageNamed:name]) {
-            UIAlertController *error = [UIAlertController alertControllerWithTitle:@"Symbol not found" message:@"Enter the exact name of an SF Symbol available on this iOS version." preferredStyle:UIAlertControllerStyleAlert];
-            [error addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:error animated:YES completion:nil];
-            return;
-        }
-        _draft[SGRNavbarIcon] = [@"sf:" stringByAppendingString:name];
-        _draft[SGRTabDraftIconChosen] = @YES;
-        [self.navigationController popViewControllerAnimated:YES];
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
 @end
 
 static void SGRPresentTabEditor(UIViewController *owner) {
