@@ -383,10 +383,16 @@ static NSArray<NSString *> *SGTabSFSymbolNames(void) {
         NSMutableArray<NSString *> *ranked = [NSMutableArray array];
         NSMutableSet<NSString *> *seen = [NSMutableSet set];
         for (NSString *name in candidates) {
-            if ([catalogSet containsObject:name] && [seen addObject:name]) [ranked addObject:name];
+            if ([catalogSet containsObject:name] && ![seen containsObject:name]) {
+                [seen addObject:name];
+                [ranked addObject:name];
+            }
         }
         for (NSString *name in catalog) {
-            if ([seen addObject:name]) [ranked addObject:name];
+            if (![seen containsObject:name]) {
+                [seen addObject:name];
+                [ranked addObject:name];
+            }
         }
         names = [ranked copy];
     });

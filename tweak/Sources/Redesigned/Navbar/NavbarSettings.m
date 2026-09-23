@@ -381,12 +381,23 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
             @"bolt.fill", @"play.circle.fill", @"shuffle", @"repeat", @"antenna.radiowaves.left.and.right", @"ear", @"guitar", @"pianokeys", @"drum", @"ticket.fill",
             @"calendar", @"mappin.and.ellipse", @"bag.fill", @"tv.fill", @"video.fill", @"speaker.wave.2.fill", @"airplayaudio", @"ellipsis.circle.fill", @"clock.fill", @"arrow.up.right.circle.fill",
         ];
-        NSMutableArray<NSString *> *available = [NSMutableArray array];
+        NSArray<NSString *> *catalog = SGSFSymbolCatalog();
+        NSSet<NSString *> *catalogSet = [NSSet setWithArray:catalog];
+        NSMutableArray<NSString *> *ranked = [NSMutableArray array];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
         for (NSString *name in candidates) {
-            if (available.count == 20) break;
-            if ([UIImage systemImageNamed:name]) [available addObject:name];
+            if ([catalogSet containsObject:name] && ![seen containsObject:name]) {
+                [seen addObject:name];
+                [ranked addObject:name];
+            }
         }
-        names = [available copy];
+        for (NSString *name in catalog) {
+            if (![seen containsObject:name]) {
+                [seen addObject:name];
+                [ranked addObject:name];
+            }
+        }
+        names = [ranked copy];
     });
     return names;
 }
