@@ -1,5 +1,4 @@
 #import "Core/SGCore.h"
-#import "Core/SGGlass.h"
 #import "Core/SGSFSymbolCatalog.h"
 #import "Settings/SGPage.h"
 #import "Settings/SGPageStyle.h"
@@ -68,32 +67,11 @@ static void appendTab(NSDictionary *tab) {
 
 static NSString *const SGRTabDraftIconChosen = @"iconChosen";
 
-static char kSGRTabCellGlassKey;
-
-static void SGRTabApplyGlassBackground(SGPage *page) {
-    page.view.backgroundColor = UIColor.clearColor;
-    page.tableView.backgroundColor = UIColor.clearColor;
-    UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:SGGlassEffect()];
-    glass.userInteractionEnabled = NO;
-    glass.frame = page.tableView.bounds;
-    glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    page.tableView.backgroundView = glass;
-}
-
-static void SGRTabApplyGlassToCell(UITableViewCell *cell) {
-    cell.backgroundColor = UIColor.clearColor;
-    cell.contentView.backgroundColor = UIColor.clearColor;
-    UIVisualEffectView *glass = SGGlassFor(cell.contentView, &kSGRTabCellGlassKey);
-    glass.frame = cell.contentView.bounds;
-    glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    SGShapeGlass(glass, 12, NO);
-    cell.tintColor = UIColor.whiteColor;
-}
-
 static UIView *SGRTabIconPreview(NSString *name, CGFloat size) {
     if ([name hasPrefix:@"sf:"]) {
         NSString *symbol = [name substringFromIndex:3];
-        UIImage *image = [[UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        UIImage *baseImage = [UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]];
+        UIImage *image = [baseImage imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal];
         UIImageView *preview = [[UIImageView alloc] initWithImage:image];
         preview.tintColor = UIColor.whiteColor;
         preview.contentMode = UIViewContentModeScaleAspectFit;
@@ -154,7 +132,7 @@ static NSArray<NSDictionary *> *openablePresets(void) {
 - (void)showLinkError:(NSString *)message;
 @end
 
-@interface SGRTabIconPickerPage : SGPage <UISearchBarDelegate>
+@interface SGRTabIconPickerPage : SGPage <UISearchBarDelegate, UISearchResultsUpdating>
 - (instancetype)initWithDraft:(NSMutableDictionary *)draft;
 @end
 
@@ -176,7 +154,6 @@ static NSArray<NSDictionary *> *openablePresets(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    SGRTabApplyGlassBackground(self);
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(cancel)];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Add" style:UIBarButtonItemStyleDone target:self action:@selector(add)];
     self.navigationItem.rightBarButtonItem.enabled = [_draft[SGRNavbarURI] length] > 0;
@@ -213,7 +190,6 @@ static NSArray<NSDictionary *> *openablePresets(void) {
             [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
         ]];
         _nameField = field;
-        SGRTabApplyGlassToCell(cell);
         return cell;
     }
     UITableViewCell *cell = SGDequeueCell(table, @"tab-editor");
@@ -227,7 +203,6 @@ static NSArray<NSDictionary *> *openablePresets(void) {
         cell.accessoryType = UITableViewCellAccessoryNone;
     }
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-    SGRTabApplyGlassToCell(cell);
     return cell;
 }
 
@@ -289,7 +264,7 @@ static NSArray<NSDictionary *> *openablePresets(void) {
     self.title = @"Choose a Link";
     return self;
 }
-- (void)viewDidLoad { [super viewDidLoad]; SGRTabApplyGlassBackground(self); }
+- (void)viewDidLoad { [super viewDidLoad]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)table { return 2; }
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section { return section == 0 ? (NSInteger)_presets.count : 1; }
 - (UIView *)tableView:(UITableView *)table viewForHeaderInSection:(NSInteger)section {
@@ -307,7 +282,7 @@ static NSArray<NSDictionary *> *openablePresets(void) {
     }
     if (path.section == 0) { UIImageView *checkmark=SGSymbolView(@"checkmark",14,UIImageSymbolWeightSemibold,20); checkmark.tintColor=UIColor.whiteColor; cell.accessoryView=checkmark; cell.accessoryType=UITableViewCellAccessoryNone; }
     else cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    cell.selectionStyle=UITableViewCellSelectionStyleDefault; SGRTabApplyGlassToCell(cell); return cell;
+    cell.selectionStyle=UITableViewCellSelectionStyleDefault; return cell;
 }
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
     [table deselectRowAtIndexPath:path animated:YES];
@@ -419,12 +394,15 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
 @implementation SGRTabIconPickerPage {
     NSMutableDictionary *_draft;
     UISegmentedControl *_catalog;
+    UISearchController *_searchController;
     UISearchBar *_searchBar;
     NSArray<NSString *> *_encore;
     NSArray<NSString *> *_symbols;
     NSArray<NSString *> *_displayedIcons;
-    NSUInteger _encoreVisibleCount;
-    BOOL _searchVisible;
+    NSUInteger _candidateOffset;
+    BOOL _isLoadingIcons;
+    NSString *_lastQuery;
+    NSInteger _lastCatalogIndex;
     NSUInteger _searchGeneration;
 }
 
@@ -433,16 +411,14 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     _draft = draft;
     _encore = SGRTabEncoreIconNames();
     _symbols = SGRTabSFSymbolNames();
-    _encoreVisibleCount = MIN((NSUInteger)50, _encore.count);
+    _lastCatalogIndex = NSNotFound;
     self.title = @"Choose an Icon";
     return self;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    SGRTabApplyGlassBackground(self);
     self.tableView.tintColor = UIColor.whiteColor;
-    self.tableView.tintAdjustmentMode = UIViewTintAdjustmentModeNormal;
 
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.tableView.bounds.size.width, 48)];
     _catalog = [[UISegmentedControl alloc] initWithItems:@[@"Spotify Encore", @"SF Symbols"]];
@@ -456,11 +432,18 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     [header addSubview:_catalog];
     self.tableView.tableHeaderView = header;
 
-    _searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 220, 36)];
+    _searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
+    _searchController.searchResultsUpdater = self;
+    _searchController.obscuresBackgroundDuringPresentation = NO;
+    _searchController.hidesNavigationBarDuringPresentation = NO;
+    self.navigationItem.searchController = _searchController;
+    self.navigationItem.hidesSearchBarWhenScrolling = NO;
+    _searchBar = _searchController.searchBar;
     _searchBar.placeholder = @"Search all icons";
-    _searchBar.searchBarStyle = UISearchBarStyleMinimal;
     _searchBar.tintColor = UIColor.whiteColor;
     _searchBar.delegate = self;
+    self.definesPresentationContext = YES;
+
     [self refreshIconResults];
     [self updateToolbar];
 }
@@ -474,6 +457,7 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     _searchGeneration++;
+    _searchController.active = NO;
     [_searchBar resignFirstResponder];
     [self.navigationController setToolbarHidden:YES animated:NO];
 }
@@ -488,45 +472,38 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     }
     CGFloat controlWidth = MIN(MAX(0, width - 32), 280);
     _catalog.frame = CGRectMake((width - controlWidth) / 2, 7, controlWidth, 34);
-    if (_searchVisible) _searchBar.frame = CGRectMake(0, 0, MAX(120, self.view.bounds.size.width - 104), 36);
     self.tableView.tintColor = UIColor.whiteColor;
-    for (UITableViewCell *cell in self.tableView.visibleCells) cell.tintColor = UIColor.whiteColor;
 }
 
 - (void)updateToolbar {
     if (!self.navigationController) return;
     [self.navigationController setToolbarHidden:NO animated:NO];
     self.navigationController.toolbar.tintColor = UIColor.whiteColor;
-    UIBarButtonItem *space = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    if (_searchVisible) {
-        _searchBar.frame = CGRectMake(0, 0, MAX(120, self.view.bounds.size.width - 104), 36);
-        UIBarButtonItem *field = [[UIBarButtonItem alloc] initWithCustomView:_searchBar];
-        UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithTitle:@"Cancel" style:UIBarButtonItemStylePlain target:self action:@selector(endSearch)];
-        self.toolbarItems = @[field, space, cancel];
-    } else {
-        UIBarButtonItem *search = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass"] style:UIBarButtonItemStylePlain target:self action:@selector(beginSearch)];
-        search.accessibilityLabel = @"Search all icons";
-        self.toolbarItems = @[space, search];
+    NSMutableArray<UIBarButtonItem *> *items = [NSMutableArray array];
+    if (_catalog.selectedSegmentIndex == 1) {
+        UIBarButtonItem *choose = [[UIBarButtonItem alloc] initWithTitle:@"SF Symbol…" style:UIBarButtonItemStylePlain target:self action:@selector(chooseDifferentSymbol)];
+        [items addObject:choose];
     }
+    if (@available(iOS 26.0, *)) {
+        self.navigationItem.preferredSearchBarPlacement = UINavigationItemSearchBarPlacementIntegratedButton;
+        self.navigationItem.searchBarPlacementAllowsToolbarIntegration = YES;
+        [items addObject:[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil]];
+        [items addObject:self.navigationItem.searchBarPlacementBarButtonItem];
+    } else {
+        if (items.count) [items addObject:[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil]];
+    }
+    self.toolbarItems = items;
 }
 
-- (void)beginSearch {
-    _searchVisible = YES;
-    [self updateToolbar];
-    dispatch_async(dispatch_get_main_queue(), ^{ [self->_searchBar becomeFirstResponder]; });
-}
-
-- (void)endSearch {
-    _searchGeneration++;
-    [_searchBar resignFirstResponder];
-    _searchBar.text = @"";
-    _searchVisible = NO;
-    [self refreshIconResults];
-    [self updateToolbar];
-    [self.tableView reloadData];
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
+    [self scheduleIconSearchRefresh];
 }
 
 - (void)searchBar:(UISearchBar *)bar textDidChange:(NSString *)text {
+    [self scheduleIconSearchRefresh];
+}
+
+- (void)scheduleIconSearchRefresh {
     NSUInteger generation = ++_searchGeneration;
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -539,61 +516,51 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)bar { [bar resignFirstResponder]; }
 
+- (void)searchBarCancelButtonClicked:(UISearchBar *)bar {
+    bar.text = @"";
+    [self scheduleIconSearchRefresh];
+}
+
 - (void)catalogChanged:(UISegmentedControl *)sender {
     _searchGeneration++;
+    _lastCatalogIndex = NSNotFound;
     [self refreshIconResults];
     [self.tableView reloadData];
+    [self updateToolbar];
 }
 
 - (void)refreshIconResults {
-    NSString *query = [_searchBar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (!query.length) {
-        _displayedIcons = _catalog.selectedSegmentIndex == 0
-            ? [_encore subarrayWithRange:NSMakeRange(0, MIN(_encoreVisibleCount, _encore.count))]
-            : _symbols;
-        return;
+    NSString *query = [[(_searchBar.text ?: @"") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] copy];
+    if (_lastCatalogIndex != _catalog.selectedSegmentIndex || ![_lastQuery isEqualToString:query]) {
+        _lastCatalogIndex = _catalog.selectedSegmentIndex;
+        _lastQuery = query;
+        _candidateOffset = 0;
+        _displayedIcons = @[];
     }
-    NSArray<NSString *> *source = _catalog.selectedSegmentIndex == 0 ? _encore : SGSFSymbolCatalog();
-    NSMutableArray<NSString *> *matches = [NSMutableArray array];
-    for (NSString *name in source) {
-        if ([name rangeOfString:query options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
+    [self loadNextIconBatch];
+}
+
+- (void)loadNextIconBatch {
+    if (_isLoadingIcons || !_catalog) return;
+    NSArray<NSString *> *source = _catalog.selectedSegmentIndex == 0 ? _encore : _symbols;
+    NSString *query = _lastQuery ?: @"";
+    NSMutableArray<NSString *> *results = [_displayedIcons mutableCopy] ?: [NSMutableArray array];
+    NSUInteger added = 0;
+    _isLoadingIcons = YES;
+    while (_candidateOffset < source.count && added < 50) {
+        NSString *name = source[_candidateOffset++];
+        if (query.length && [name rangeOfString:query options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
         if (_catalog.selectedSegmentIndex == 1 && ![UIImage systemImageNamed:name]) continue;
-        [matches addObject:name];
+        [results addObject:name];
+        added++;
     }
-    _displayedIcons = [matches copy];
+    _displayedIcons = [results copy];
+    _isLoadingIcons = NO;
 }
 
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section { return (NSInteger)_displayedIcons.count; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)table { return 1; }
-
-- (CGFloat)tableView:(UITableView *)table heightForFooterInSection:(NSInteger)section {
-    NSString *query = [_searchBar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (section != 0) return CGFLOAT_MIN;
-    if (_catalog.selectedSegmentIndex == 1 || (!query.length && _encoreVisibleCount < _encore.count)) return 52;
-    return CGFLOAT_MIN;
-}
-
-- (UIView *)tableView:(UITableView *)table viewForFooterInSection:(NSInteger)section {
-    NSString *query = [_searchBar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    BOOL chooseSymbol = _catalog.selectedSegmentIndex == 1;
-    if (section != 0 || (!chooseSymbol && (query.length || _encoreVisibleCount >= _encore.count))) return nil;
-
-    UIView *footer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, table.bounds.size.width, 52)];
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-    NSString *title = chooseSymbol ? @"Choose a different SF Symbol…" : @"Load 50 more icons";
-    [button setTitle:title forState:UIControlStateNormal];
-    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    button.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
-    button.layer.cornerRadius = 12;
-    button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-    button.frame = CGRectMake(16, 4, MAX(0, table.bounds.size.width - 32), 42);
-    button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    SEL action = chooseSymbol ? @selector(chooseDifferentSymbol) : @selector(loadMoreEncoreIcons);
-    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    [footer addSubview:button];
-    return footer;
-}
-
+- (CGFloat)tableView:(UITableView *)table heightForFooterInSection:(NSInteger)section { return CGFLOAT_MIN; }
 - (CGFloat)tableView:(UITableView *)table heightForRowAtIndexPath:(NSIndexPath *)path { return 52; }
 
 - (UITableViewCell *)tableView:(UITableView *)table cellForRowAtIndexPath:(NSIndexPath *)path {
@@ -604,8 +571,19 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     cell.accessoryView = SGRTabIconPreview(icon, 28);
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     cell.tintColor = UIColor.whiteColor;
-    SGRTabApplyGlassToCell(cell);
     return cell;
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if (scrollView != self.tableView || _isLoadingIcons) return;
+    NSArray<NSString *> *source = _catalog.selectedSegmentIndex == 0 ? _encore : _symbols;
+    if (_candidateOffset >= source.count) return;
+    CGFloat remaining = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.size.height);
+    if (remaining < 52.0 * 3.0) {
+        NSUInteger previousCount = _displayedIcons.count;
+        [self loadNextIconBatch];
+        if (_displayedIcons.count != previousCount) [self.tableView reloadData];
+    }
 }
 
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
@@ -613,12 +591,6 @@ static NSArray<NSString *> *SGRTabSFSymbolNames(void) {
     _draft[SGRNavbarIcon] = _catalog.selectedSegmentIndex == 0 ? name : [@"sf:" stringByAppendingString:name];
     _draft[SGRTabDraftIconChosen] = @YES;
     [self.navigationController popViewControllerAnimated:YES];
-}
-
-- (void)loadMoreEncoreIcons {
-    _encoreVisibleCount = MIN(_encore.count, _encoreVisibleCount + 50);
-    [self refreshIconResults];
-    [self.tableView reloadData];
 }
 
 - (void)chooseDifferentSymbol {
@@ -653,14 +625,12 @@ static void SGRPresentTabEditor(UIViewController *owner) {
     NSMutableDictionary *draft = [@{SGRNavbarTitle: @"", SGRNavbarURI: @"", SGRNavbarIcon: @"star", SGRTabDraftIconChosen: @NO} mutableCopy];
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:[[SGRTabEditorPage alloc] initWithDraft:draft]];
     navigation.modalPresentationStyle = UIModalPresentationPageSheet;
-    navigation.view.backgroundColor=UIColor.clearColor; navigation.navigationBar.backgroundColor=UIColor.clearColor; navigation.navigationBar.translucent=YES; navigation.toolbar.backgroundColor=UIColor.clearColor; navigation.toolbar.translucent=YES;
     navigation.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     UISheetPresentationController *sheet = navigation.sheetPresentationController;
     if (sheet) {
         UISheetPresentationControllerDetent *compact=[UISheetPresentationControllerDetent customDetentWithIdentifier:@"spotifyglass.custom-tab.compact" resolver:^CGFloat(id<UISheetPresentationControllerDetentResolutionContext> context) { return MIN(context.maximumDetentValue, MIN(360.0, MAX(280.0, context.maximumDetentValue * 0.44))); }];
         sheet.detents=@[compact,[UISheetPresentationControllerDetent largeDetent]]; sheet.selectedDetentIdentifier=@"spotifyglass.custom-tab.compact";
         sheet.prefersGrabberVisible = YES;
-        sheet.preferredCornerRadius = 24;
         sheet.prefersScrollingExpandsWhenScrolledToEdge = YES;
     }
     [owner presentViewController:navigation animated:YES completion:nil];
